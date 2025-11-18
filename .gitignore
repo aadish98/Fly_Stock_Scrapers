@@ -1,0 +1,46 @@
+#
+# Python
+#
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+#
+# Environments and tooling
+#
+.env
+.env.*
+.venv/
+venv/
+.idea/
+.vscode/
+
+#
+# Build artifacts
+#
+build/
+dist/
+*.egg-info/
+
+#
+# OS files
+#
+.DS_Store
+Thumbs.db
+
+#
+# Project data (large/unversioned)
+# Keep code and small lookup TSVs; exclude bulk data.
+#
+Data/
+
+

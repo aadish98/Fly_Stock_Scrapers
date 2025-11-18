@@ -1,0 +1,10 @@
+name: bdsc_rnai_stock_search_gui
+title:
+username: aadishms
+account: aadishms
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 12415777
+bundleId: 9137110
+url: https://aadishms.shinyapps.io/bdsc_rnai_stock_search_gui/
+version: 1

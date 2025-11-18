@@ -1,0 +1,210 @@
+---
+title: "BDSC Gene2Stock"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r}
+rm(list=ls())
+
+library(devtools)
+library('ggplot2')
+
+# Scraping tools
+library(RSelenium)
+library(XML)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = '/Users/AadishShah/Desktop/Projects.nosync/Allada Lab Playground/Brain_Seq/Analysis_Results/v9/All_Experiments/log2b_0.6/CSV/activity_related_genes.csv')
+
+# Changes working directory to where sample data is stored
+base_dir <- '/Users/AadishShah/Desktop/Projects.nosync/Allada Lab Playground/Fat Body analysis/FBvsWB'
+```
+
+```{r}
+# Gets file names in folder 
+csv_files <- "Data/DESeq2_result_FBvsWB_with_FC5.csv"
+
+# Read the CSV file into a data frame
+top_FCratio_FB_WB <- read.csv(csv_files)
+```
+
+### Sanity check to observe total number of rows in both tables
+```{r}
+print("top_FCratio_FB_WB")
+print(paste("Nrows:", length(top_FCratio_FB_WB$ext_gene)))
+head(top_FCratio_FB_WB, 10)
+top_FCratio_FB_WB <- head(top_FCratio_FB_WB, 100)
+```
+
+# Get Stock ID's from gene list using RSelenium and BDSC Website
+
+## Setup client
+
+```{r, include = FALSE}
+library(RSelenium)
+# Close the remote driver object to stop the Selenium server
+
+rD <- rsDriver(browser = "firefox", # browser name 
+               port = 8090L, # port number 
+               version = "latest", # browser version
+               verbose = TRUE)
+remDr <- rD[['client']]
+remDr$open()
+```
+
+# Prep for Symbol Search
+
+```{r}
+url = "https://bdsc.indiana.edu/Home/AdvancedComponentSearch"
+# For navigating to the url 
+remDr$navigate(url)
+```
+
+# Symbol Search
+
+```{r}
+# Gets list of symbol id's for relevant gene driver lines
+get_symbol_list <- function(gene_name, driver_line="GAL4"){
+  # Select 'all' for gene constraints (open list, then select all)
+  remDr$findElement(using = 'xpath', value = "/html/body/main/section[1]/div/div/div/div/table[1]/tbody/tr[1]/td/span/span[1]/span")$clickElement()
+  remDr$findElement(using = 'xpath', value = "/html/body/div[2]/div/div/div/div[2]/ul/li[2]")$clickElement()
+  
+  # Select 'exactly matching' for gene name
+  remDr$findElement(using = 'xpath', value = '/html/body/main/section[1]/div/div/div/div/table[1]/tbody/tr[2]/td[2]/span[1]/span[1]/span')$clickElement()
+  remDr$findElement(using = 'xpath', value = '/html/body/div[4]/div/div/div/div[2]/ul/li[3]/span')$clickElement()
+  
+  # Add gene
+  
+  text_field1 <- remDr$findElement(using = "css", value = "#gene1")
+  text_field1$clearElement()
+  text_field1$sendKeysToElement(list(gene_name))
+  
+  # Add 2nd gene of interest
+  if (driver_line != 'Mi{MIC}'){
+    value_text_field <- '#gene2'
+  } else {
+    value_text_field <- '#componentSymbol'
+  }
+  
+  text_field2 <- remDr$findElement(using = "css", value = value_text_field)
+  text_field2$clearElement()
+  text_field2$sendKeysToElement(list(driver_line))
+  Sys.sleep(0.2)
+  
+  # Click search
+  remDr$findElement(using = 'xpath', value = '//*[@id="AdvancedSearch"]')$clickElement()
+  Sys.sleep(4)
+  
+  # Process symbol table
+  table_element <- remDr$findElement(using = "class name", value = 'k-table')
+  Sys.sleep(0.5)
+  
+  # Extract HTML content of the table
+  table_html <- table_element$getElementAttribute("outerHTML")[[1]]
+  
+  # Convert HTML content to a dataframe (example using xml)
+  table_data <- data.frame(readHTMLTable(table_html))
+  col_name <- names(table_data)[grepl("Component.Symbol", names(table_data))][1]
+  
+  text_field1$clearElement()
+  text_field2$clearElement()
+  return(table_data[[col_name]])
+}
+
+# Test run
+# sample10 <- mapply(get_symbol_list, head(top_FCratio_FB_WB$ext_gene,10), 'GAL4')
+# print(sample10)
+```
+
+```{r}
+# Add symbol_id columns for each GAL4 line
+top_FCratio_FB_WB$symbol_id_GAL4 <- mapply(get_symbol_list, top_FCratio_FB_WB$ext_gene, "GAL4")
+top_FCratio_FB_WB$symbol_id_GawB <- mapply(get_symbol_list, top_FCratio_FB_WB$ext_gene, "GawB")
+top_FCratio_FB_WB$symbol_id_Mi_MIC <- mapply(get_symbol_list, top_FCratio_FB_WB$ext_gene, 'Mi{MIC}')
+```
+
+# Prep for Stock Search
+
+```{r}
+prepare_BDSC_stock_search <- function(remDr){
+  url = "https://bdsc.indiana.edu/Home/Search"
+  # For navigating to the url 
+  remDr$navigate(url)
+  Sys.sleep(2)
+}
+```
+
+# Stock Search
+
+```{r}
+# Returns a list of stock IDs (from BDSC) given a list of symbol id's
+get_stock_list <- function(symbol_id_list){
+  stock_list <- list()
+  for (symbol_id in symbol_id_list){
+    #Add symbol_id from list
+    text_field1 <- remDr$findElement(using = "xpath", value = '//*[@id="presearch"]')
+    text_field1$clearElement()
+    text_field1$sendKeysToElement(list(symbol_id))
+    
+    # Click search
+    remDr$findElement(using = 'xpath', value = '//*[@id="SimpleSearch"]')$clickElement()
+    Sys.sleep(2)
+    
+    # Process stock table
+    table_element <- remDr$findElement(using = "css", value = '.k-master-row > td:nth-child(2)')
+    
+    Sys.sleep(1)
+    
+    # Extract HTML content of the table
+    stockid <- table_element$getElementAttribute("innerHTML")[[1]]
+    stock_list <- c(stock_list, stockid)
+  }
+  return(stock_list)
+} 
+
+```
+
+## Get stock ID's for all relevant genes
+
+```{r}
+prepare_BDSC_stock_search(remDr)
+top_FCratio_FB_WB$stock_id_GAL4 <- lapply(top_FCratio_FB_WB$symbol_id_GAL4, get_stock_list)
+top_FCratio_FB_WB$stock_id_GawB <- lapply(top_FCratio_FB_WB$symbol_id_GawB, get_stock_list)
+top_FCratio_FB_WB$stock_id_Mi_MIC <- lapply(top_FCratio_FB_WB$symbol_id_Mi_MIC, get_stock_list)
+```
+
+```{r}
+# Sanity Check
+print(top_FCratio_FB_WB)
+#print(unlist(top_FCratio_FB_WB[top_FCratio_FB_WB$ext_gene == "CG6503", c("symbol_id_Mi_MIC")]))
+```
+
+# Close server connection
+
+```{r}
+# For closing the browser 
+remDr$close()
+rD$server$stop()
+```
+
+# Write to CSV
+
+```{r}
+flatten_list_columns <- function(df) {
+  for (col in names(df)) {
+    if (is.list(df[[col]])) {
+      df[[col]] <- sapply(df[[col]], paste, collapse = ", ")
+    }
+  }
+  return(df)
+}
+
+# Flatten list columns in the dataframe
+df_flattened <- flatten_list_columns(top_FCratio_FB_WB)
+
+# Write the dataframe with flattened list columns to a CSV file
+write.csv(df_flattened, file = "Data/Results/stock_ids.csv", row.names = FALSE)
+```

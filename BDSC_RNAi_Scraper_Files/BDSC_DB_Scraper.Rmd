@@ -1,0 +1,227 @@
+---
+title: "BDSC Gene2Stock"
+output:
+  pdf_document: default
+---
+
+```{r}
+rm(list=ls())
+
+library(devtools)
+library('ggplot2')
+library(dplyr)
+# Scraping tools
+library(XML)
+library(qtl2)
+library(data.table)
+source('scraper_helper_functions.R')
+library(biomaRt)
+```
+
+# Set Up Filepaths
+
+```{r}
+source('scraper_helper_functions.R')
+# Changes working directory to where sample data is stored
+base_dir <- '../Aging_FCA/Data/Genes_of_Interest/Brain_Seq/v071224/Neuronal-Enrichment/CSV'
+sorting_invariant = 'frequency'
+experiment_consideration <- 'All-Experiments' # 'Whole-Brain-Experiments'
+list_type <- 'RNAi' # 'GAL4'
+output_version <- get_todays_version()
+path_keywords <- c()
+file_keywords <- c()
+blacklist_keywords <- c("gene_expression")
+flybase <- useMart("ensembl", dataset = "dmelanogaster_gene_ensembl")
+```
+
+# Read all data
+
+```{r}
+source('scraper_helper_functions.R')
+path_keyword_filepattern <- paste(path_keywords, collapse = "_")
+file_keywords_filepattern <- paste(file_keywords, collapse = "_")
+
+latest_version_folderpath <- get_latest_version_folderpath(base_dir)
+folder_path <- file.path(latest_version_folderpath, experiment_consideration, "CSV")
+df_list <- get_all_sleep_wake_gene_sets(base_dir, file_keywords, path_keywords, blacklist_keywords)
+df_list <- filter_df_list_on_freq(df_list)
+
+output_folderpath <- file.path("Data","Genes_of_Interest","Brain_Seq", output_version, paste0(experiment_consideration,"_BDSC_Stock_ID"))
+
+names(df_list)
+output_folderpath
+```
+
+# Read the databases from BDSC
+
+## Read csv files
+
+```{r, include = FALSE}
+source('scraper_helper_functions.R')
+bdsc_db_list <- read_all_csvs_as_dt_recursive("Data/BDSC")
+```
+
+# Prep for Stock Search
+
+```{r}
+print(names(bdsc_db_list$bloomington))
+print(names(bdsc_db_list$stockcomps_map_comments))
+```
+
+# Stock Search
+
+```{r}
+source("scraper_helper_functions.R")
+library(stringr)
+df_names <- names(df_list)
+search_summary <- list()
+total_stocks <- 0
+for(df_name in df_names){
+  gene_info <- getBM(
+    attributes = c("external_gene_name", "flybase_gene_id"),
+    filters = "external_gene_name",
+    values = df_list[[df_name]]$ext_gene,
+    mart = flybase
+  )
+  df_list[[df_name]] <- df_list[[df_name]] %>%
+    left_join(gene_info, by = c("ext_gene" = "external_gene_name"))
+  df_list[[df_name]]$flybase_gene_id[is.na(df_list[[df_name]]$flybase_gene_id)] <- df_list[[df_name]]$ext_gene[is.na(df_list[[df_name]]$flybase_gene_id)]
+  gene_list <- na.omit(df_list[[df_name]]$flybase_gene_id)
+  df_list[[df_name]]$RNAi_stock_list <- NA
+  df_list[[df_name]]$genotype_list <- NA
+  df_list[[df_name]]$symbol_list <- NA
+  df_list[[df_name]]$map_list <- NA
+  df_list[[df_name]]$comments <- NA
+  df_list[[df_name]]$total_stock_count <- 0
+  
+  gene_list_size <- length(gene_list)
+  print(df_name)
+  print(paste0("Getting stock id's for: ", gene_list_size, " genes"))
+  
+  for(gene in gene_list){
+    search_str_list <- c(gene, "RNAi")
+    colList <- c("comment1", "comment2", "comment3")
+    rnai_stockcomps <- suppressWarnings(get_filtered_db_multiple_cols(bdsc_db_list$stockcomps_map_comments, search_str_list, colList))
+    num_stocks_for_gene <- nrow(rnai_stockcomps)
+    if(num_stocks_for_gene > 0){
+      BDSC_stockid_list <- paste(rnai_stockcomps$`Stk #`, collapse = '\n')
+      genotype_list <- paste(rnai_stockcomps$Genotype, collapse = '\n')
+      symbol_list <- paste(rnai_stockcomps$component_symbol, collapse = '\n')
+      map_list <- paste(rnai_stockcomps$mapstatement, collapse = '\n')
+      comment_list <- paste(rnai_stockcomps$comment1, collapse = '\n')
+      
+      gene_index <- which(df_list[[df_name]]$flybase_gene_id == gene)
+      
+      # Assign the lists to the respective columns
+      df_list[[df_name]]$RNAi_stock_list[gene_index] <- BDSC_stockid_list
+      df_list[[df_name]]$genotype_list[gene_index] <- genotype_list
+      df_list[[df_name]]$symbol_list[gene_index] <- symbol_list
+      df_list[[df_name]]$map_list[gene_index] <- map_list
+      df_list[[df_name]]$comments[gene_index] <- comment_list
+      df_list[[df_name]]$total_stock_count[gene_index] <- num_stocks_for_gene
+      total_stocks <- total_stocks + num_stocks_for_gene
+    }
+  }
+  print(paste0("Running total of stock id's: ",total_stocks))
+}
+```
+```{r}
+df_names <- names(df_list)
+zeros <- 0
+total <- 0
+for (df_name in df_names) {
+  total_nrow <- nrow(df_list[[df_name]])
+  total_stocks <- nrow(df_list[[df_name]][df_list[[df_name]]$total_stock_count == 0,])
+  zeros <- zeros + total_stocks
+  total <- total + total_nrow
+}
+print(paste0("Total number of genes: ", total))
+print(paste0("Total number of genes with no BDSC RNAi stocks: ", zeros))
+```
+
+
+# Clean Results
+
+```{r}
+source('scraper_helper_functions.R')
+library(dplyr)
+df_names <- names(df_list)
+for(df_name in df_names){
+  # Read the CSV file into a data frame
+  start_col_list <- c()
+  df <- df_list[[df_name]]
+  df <- get_sorted_df(df, 'experiment_frequency', TRUE)
+  df <- df %>%
+    rename("BDSC_RNAi_stock_ids" =  paste0(list_type, "_stock_list"))
+  if(grepl("missed", df_name)){
+    start_col_list <- c("ext_gene", "total_stock_count", "BDSC_RNAi_stock_ids", "genotype_list", "symbol_list", "map_list", "comments")
+  }else{
+    start_col_list <- c("ext_gene", "flybase_gene_id","experiment_frequency", "total_stock_count" ,"BDSC_RNAi_stock_ids", "genotype_list", "symbol_list", "map_list", "comments")
+  }
+  remove_col_list <- c("X", "NA.", "NA", "X.1", "X", "X.2", "X.3", "X.2")
+  
+  # Determine remaining columns
+  remaining_col_list <- setdiff(names(df), c(start_col_list, remove_col_list))
+  ordered_cols <- c(start_col_list, remaining_col_list)
+  df <- df[ordered_cols]
+  is.na(df) <- "NA"
+  df_list[[df_name]] <- df
+}
+```
+
+# Write to CSV
+
+```{r}
+names(df_list) <- paste0("BDSC_", list_type ,"_stock_ids_", names(df_list))
+output_folderpath
+```
+
+```{r}
+write_all_results_csv(df_list, output_folderpath, row.names = FALSE)
+```
+
+```{r}
+for(df in df_list){
+  print(df[df$ext_gene == "pippin",])
+}
+```
+
+
+```{r}
+total_consistent <- 0
+total_found <- 0
+for(dfn in names(df_list)){
+  if(grepl("FACS", dfn)){
+    total_found <- total_found + nrow(df_list[[dfn]])
+    df <- df_list[[dfn]]
+    consistency_column <- if ("consistent_sleep_across_all_datasets" %in% names(df)) {
+      "consistent_sleep_across_all_datasets"
+    } else if ("consistent_wake_across_all_datasets" %in% names(df)) {
+      "consistent_wake_across_all_datasets"
+    } else {
+      NULL
+    }
+    
+    if (!is.null(consistency_column)) {
+      total_consistent <- total_consistent + sum(df[[consistency_column]], na.rm = FALSE)
+    }
+  }
+}
+```
+
+```{r}
+total_consistent/total_found
+```
+
+
+
+
+# ```{r}
+# df_list_copy <- df_list
+# for(dfn in names(df_list_copy)){
+#   df_list[[dfn]] <- head(df_list_copy[[dfn]], 50)
+# }
+# ```
+
+
+

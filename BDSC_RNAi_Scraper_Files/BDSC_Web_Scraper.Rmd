@@ -1,0 +1,147 @@
+---
+title: "BDSC Gene2Stock"
+output:
+  pdf_document: default
+---
+
+```{r}
+rm(list=ls())
+
+library(devtools)
+library('ggplot2')
+library(dplyr)
+# Scraping tools
+library(RSelenium)
+library(XML)
+source('scraper_helper_functions.R')
+```
+
+# Set Up Filepaths
+
+```{r}
+source('scraper_helper_functions.R')
+# Changes working directory to where sample data is stored
+base_dir <- '/Users/AadishShah/Desktop/Projects.nosync/Allada\ Lab\ Downloads/Aging_FCA/Data/Genes_of_Interest/Brain_Seq'
+base_dir_blacklist <- 'Data/Genes_of_Interest/Brain_Seq/v070424/All-Experiments/female_5-wo_def_act/BDSC_Stock_ID'
+sorting_invariant = 'neuron_glia_ratio'
+experiment_consideration <- 'All-Experiments' # 'Whole-Brain-Experiments'
+list_type <- 'RNAi' # 'GAL4'
+path_keywords <- c("female_5")
+file_keywords <- c("wo_def_act")
+blacklist_keywords <- c("missed", "gene_expression")
+url = "https://bdsc.indiana.edu/Home/AdvancedComponentSearch"
+```
+
+# Read all data
+
+```{r}
+source('scraper_helper_functions.R')
+path_keyword_filepattern <- paste(path_keywords, collapse = "_")
+file_keywords_filepattern <- paste(file_keywords, collapse = "_")
+
+latest_version_folderpath <- get_latest_version_folderpath(base_dir)
+folder_path <- file.path(latest_version_folderpath, experiment_consideration, "CSV")
+df_list <- get_all_sleep_wake_gene_sets(latest_version_folderpath, file_keywords, path_keywords, blacklist_keywords)
+df_blacklist <- read_all_csvs_recursive(base_dir_blacklist)
+version_name <- get_version_name(latest_version_folderpath)
+
+output_folderpath <- file.path("Data","Genes_of_Interest","Brain_Seq", version_name, experiment_consideration,paste(c(path_keyword_filepattern,file_keywords_filepattern), collapse = '-'), "BDSC_Stock_ID" )
+names(df_list)
+output_folderpath
+```
+
+# Get Stock ID's from gene list using RSelenium and BDSC Website
+
+## Setup client
+
+```{r, include = FALSE}
+source('scraper_helper_functions.R')
+rD <- rsDriver(browser = "firefox", # browser name 
+               port = 8090L, # port number 
+               version = "latest", # browser version
+               verbose = TRUE)
+remDr <- rD[['client']]
+remDr$open()
+```
+
+# Prep for Symbol Search
+
+```{r}
+# For navigating to the url 
+remDr$navigate(url)
+```
+
+# Symbol Search
+
+```{r}
+# Add symbol_id columns for each GAL4 line
+df_names <- names(df_list)
+for(df_name in df_names){
+  # Read the CSV file into a data frame
+  df <- df_list[[df_name]]
+  df[[paste0(list_type, "_symbol_id")]] <- mapply(get_BDSC_responder_RNAi_line_symbol_list, df$ext_gene)
+  df_list[[df_name]] <- df
+}
+```
+
+# Prep for Stock Search
+
+```{r}
+prepare_BDSC_stock_search(remDr)
+```
+
+# Stock Search
+
+## Get stock ID for all relevant genes
+
+### For every stock id, get the Genotype and map
+```{r}
+df_names <- names(df_list)
+source('scraper_helper_functions.R')
+for(df_name in df_names){
+  # Read the CSV file into a data frame
+  df <- df_list[[df_name]]
+  stock_search_df <- lapply(df[[paste0(list_type, "_symbol_id")]], get_stock_list)
+  df <- cbind(df, do.call(rbind, stock_search_df))
+  df_flattened <- flatten_list_columns(df)
+  df_list[[df_name]] <- get_sorted_df(df_flattened, sorting_invariant, TRUE)
+  start_col_list <- c("ext_gene", sorting_invariant, "frequency", "stock_id", "genotypes", paste0(list_type, "_symbol_id"), "map")
+  remaining_col_list <- names(df_list[[df_name]])[!names(df_list[[df_name]]) %in% c("X","NA.","NA", "X.1", "X","X.2","X.3", "X.2",start_col_list)]
+  df_list[[df_name]] <-  df_list[[df_name]] %>%
+    select(unlist(c(start_col_list, remaining_col_list)))
+  is.na(df_list[[df_name]]) <- "NA"
+}
+```
+
+```{r}
+sleep_df <- df_list$`consistent_all_datasets_sleep_associated_genes_wo_def_act_neuronal_encrichment-_colSort-mean`
+sleep_df
+```
+
+
+# Close server connection
+
+```{r}
+# For closing the browser 
+close_selenium_server(remDr, rD)
+```
+
+# Write to CSV
+
+```{r}
+write_all_results_csv(df_list, output_folderpath, row.names = FALSE)
+```
+```{r}
+df_list_copy <- df_list
+for(dfn in names(df_list_copy)){
+  df_list[[dfn]] <- head(df_list_copy[[dfn]], 50)
+}
+```
+
+
+```{r}
+df_list$`consistent_all_datasets_sleep_associated_genes_wo_def_act_neuronal_encrichment-_colSort-mean`
+```
+
+
+
