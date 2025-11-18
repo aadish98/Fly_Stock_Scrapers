@@ -38,6 +38,13 @@ dist/
 Thumbs.db
 
 #
+# R session/project artifacts
+#
+.Rhistory
+.RData
+.Rproj.user/
+
+#
 # Project data (large/unversioned)
 # Keep code and small lookup TSVs; exclude bulk data.
 #
